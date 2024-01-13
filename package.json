@@ -1,0 +1,19 @@
+{
+  "name": "webpack-auto-deploy",
+  "version": "2.6.0",
+  "description": "vite 通过 ssh 和 sftp 自动上传插件",
+  "main": "./src/index.js",
+  "type": "module",
+  "scripts": {
+    "serve": "node ./src/index.js"
+  },
+  "author": "soonxf",
+  "license": "ISC",
+  "dependencies": {
+    "archiver": "^6.0.1",
+    "chalk": "^5.3.0",
+    "enquirer": "^2.4.1",
+    "ora": "^8.0.1",
+    "ssh2": "^1.15.0"
+  }
+}
