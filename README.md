@@ -8,7 +8,7 @@
 npm install webpack-auto-deploy --save-dev
 ```
 
-# 使用
+## 使用
 
 > 根目录新建文件 webpack.deploy.mjs
 
@@ -25,33 +25,33 @@ const __dirname = dirname(__filename);
 
 const config = [
   {
-    appName: "项目名称",
-    compress: true,
-    environment: "dev",
-    localPath: resolve(__dirname, "./dist"),
-    remotePath: "/var/www/html",
-    serverOptions: {
-      host: "192.168.1.111",
-      port: "22",
-      username: "root",
-      // password: "服务器密码,密钥登陆的话不需要",
-      passphrase: "123456", //密钥登陆的话需要
-      privateKey: resolve(__dirname, "./rsa.txt"), //密钥地址
-    },
-  },
-  {
     appName: "项目名称1",
-    compress: true,
-    environment: "dev",
-    localPath: resolve(__dirname, "./dist"),
-    remotePath: "/var/www/html",
+    compress: true, //是否压缩
+    environment: "dev", //开发环境
+    localPath: resolve(__dirname, "./dist"), //本地打包目录,即需要上传的目录
+    remotePath: "/var/www/html", //远程服务器目录
     serverOptions: {
-      host: "192.168.1.111",
-      port: "22",
-      username: "root",
-      // password: "服务器密码,密钥登陆的话不需要",
-      passphrase: "123456", //密钥登陆的话需要
-      privateKey: resolve(__dirname, "./rsa.txt"), //密钥地址
+      host: "192.168.1.111", //服务器ip
+      port: "22", //服务器端口
+      username: "root", //服务器用户名
+      password: "123456", //服务器密码,密钥登陆不需要
+      passphrase: "123456", //密钥登陆需要的话
+      privateKey: resolve(__dirname, "./rsa.txt"), //密钥地址,密码登录不需要
+    },
+  },,
+  {
+    appName: "项目名称2",
+    compress: true, //是否压缩
+    environment: "test", //测试环境
+    localPath: resolve(__dirname, "./dist"), //本地打包目录,即需要上传的目录
+    remotePath: "/var/www/html", //远程服务器目录
+    serverOptions: {
+      host: "192.168.1.111", //服务器ip
+      port: "22", //服务器端口
+      username: "root", //服务器用户名
+      password: "123456", //服务器密码,密钥登陆不需要
+      passphrase: "123456", //密钥登陆需要的话
+      privateKey: resolve(__dirname, "./rsa.txt"), //密钥地址,密码登录不需要
     },
   },
 ];
@@ -71,4 +71,10 @@ new WebpackAutoDeploy(config);
 
 ```
 npm run deploy
+```
+
+## 我的邮箱
+
+```
+soonxf@dingtalk.com
 ```

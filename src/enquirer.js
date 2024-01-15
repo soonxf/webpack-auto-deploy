@@ -25,6 +25,18 @@ export const backup = async () => {
   return answer === "确认" ? true : false;
 };
 
+export const mkdirRemotePath = async () => {
+  const answer = await new enquirer.Select({
+    name: "ready",
+    message: "远程目录不存在，是否创建",
+    choices: ["确认", "取消"],
+  })
+    .run()
+    .catch(console.error);
+
+  return answer === "确认" ? true : false;
+};
+
 export const remove = async () => {
   const answer = await new enquirer.Select({
     name: "ready",
@@ -54,4 +66,5 @@ export default {
   backup,
   remove,
   selectEnv,
+  mkdirRemotePath,
 };

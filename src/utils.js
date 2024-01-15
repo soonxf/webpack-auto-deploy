@@ -6,8 +6,7 @@ import archiver from "archiver";
 import path from "path";
 import chalk from "chalk";
 import { promisify } from "util";
-
-// ...你的代码
+import enquirer from "./enquirer.js";
 
 export const isWindowsOrLinuxPath = path => {
   const windowsRegex = /^[a-zA-Z]:\\(?:[^\\\/:*?"<>|\r\n]+\\)*[^\\\/:*?"<>|\r\n]*$/;
@@ -29,6 +28,7 @@ export const uploadDirectory = async (sftp, localPath, remotePath) => {
   try {
     const mkdirSync = promisify(sftp.mkdir.bind(sftp));
     const fastPutSync = promisify(sftp.fastPut.bind(sftp));
+    const statSync = promisify(sftp.stat.bind(sftp));
 
     const uploadSize = {
       directory: {
@@ -56,6 +56,17 @@ export const uploadDirectory = async (sftp, localPath, remotePath) => {
           uploadSize.directory.size += stats.size;
           uploadSize.directory.num += 1;
           fileList.directory.push(async () => {
+            const isExist = await statSync(_posixJoin)
+              .then(() => true)
+              .catch(() => false);
+
+            if (isExist) {
+              return {
+                success: true,
+                path: _posixJoin,
+              };
+            }
+
             const response = await mkdirSync(_posixJoin);
             return {
               success: response === undefined ? true : false,
@@ -79,6 +90,7 @@ export const uploadDirectory = async (sftp, localPath, remotePath) => {
       }
       return fileList;
     };
+
     const fileList = await _uploadDirectory(localPath, remotePath);
 
     outputStatistics("待上传", uploadSize);
@@ -106,6 +118,33 @@ export const uploadDirectory = async (sftp, localPath, remotePath) => {
     _spinner.succeed(chalk.red("上传失败\n"));
     console.warn(chalk.red(error));
   }
+};
+
+export const backup = (Client, fileName, remotePath) => {
+  return new Promise((resolve, reject) => {
+    const targetFiles = remotePath.split(/[\\/]+/).pop();
+    const spinner = ora("服务器正在备份...\n").start();
+    try {
+      Client.exec(`cd ${remotePath};cd ../;tar -czvf ${fileName} ${targetFiles}`, (err, stream) => {
+        if (!!err) return resolve(false);
+        stream.on("data", data => {});
+        stream.stderr.on("data", data => {});
+        stream.on("close", (code, signal) => {
+          if (code === 0) {
+            spinner.succeed(chalk.green("备份成功"));
+            resolve(true);
+          } else {
+            spinner.fail(chalk.red("备份失败"));
+            resolve(true);
+          }
+        });
+      });
+    } catch (error) {
+      spinner.fail(chalk.red(error));
+      Client.end();
+      resolve(false);
+    }
+  });
 };
 
 export const compress = (fileName, localPath) => {
@@ -253,6 +292,28 @@ export const deleteDirectory = async (sftp, remotePath) => {
   _spinner.succeed(chalk.green(`删除结束 耗时:${((endTime - startTime) / 1000 / 60).toFixed(3)} 分钟`));
 };
 
+export const mkdirRemotePath = async (sftp, remotePath) => {
+  const statSync = promisify(sftp.stat.bind(sftp));
+  const mkdirSync = promisify(sftp.mkdir.bind(sftp));
+  const _posixJoin = path.posix.join(remotePath);
+
+  const isExist = await statSync(_posixJoin)
+    .then(() => true)
+    .catch(() => false);
+
+  if (!isExist) {
+    const response = await enquirer.mkdirRemotePath();
+    if (response) {
+      const _response = await mkdirSync(_posixJoin);
+      if (_response === undefined) {
+        console.log(chalk.green(`远程目录 ${remotePath} 创建成功`));
+      }
+    }
+  }
+
+  return isExist;
+};
+
 export const outputStatistics = (type, statistics) => {
   console.log(
     chalk.green(
@@ -307,4 +368,6 @@ export default {
   deleteDirectory,
   outputStatistics,
   splitArrayIntoChunks,
+  backup,
+  mkdirRemotePath,
 };
