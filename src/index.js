@@ -14,7 +14,7 @@ import { isWindowsOrLinuxPath, deleteDirectory, uploadDirectory, backup, compres
 // 获取当前文件所在目录的路径
 // const __dirname = dirname(__filename);
 
-class WebpackAutoDeploy {
+export default class WebpackAutoDeploy {
   constructor(options) {
     this.fileName = "";
     this.options = {};
@@ -80,8 +80,8 @@ class WebpackAutoDeploy {
           spinner.fail(chalk.red("连接失败"));
         } else {
           spinner.succeed(chalk.green("连接成功"));
+
           await this.execBackup();
-          await this.deleteDirectory();
         }
       });
       this.Client.on("error", err => spinner.fail(chalk.red(err)));
@@ -98,22 +98,15 @@ class WebpackAutoDeploy {
       return;
     }
 
-    const sftpSync = promisify(this.Client.sftp.bind(this.Client));
+    const response = await backup(this.Client, this.fileName, remotePath);
 
-    const sftp = await sftpSync();
+    if (response === 2) return;
 
-    await mkdirRemotePath(sftp, remotePath);
-
-    const _response = await enquirer.backup();
-    if (!_response) return;
-
-    await backup(this.Client, this.fileName, remotePath);
+    await this.deleteDirectory(response);
   }
-  deleteDirectory() {
+  deleteDirectory(execBackup) {
     return new Promise(async (resolve, reject) => {
       try {
-        const response = await enquirer.remove();
-
         const { localPath, remotePath } = this.options;
 
         const sftpSync = promisify(this.Client.sftp.bind(this.Client));
@@ -122,9 +115,14 @@ class WebpackAutoDeploy {
 
         if (!sftp) return resolve(false);
 
+        if (execBackup === 0) return await this.upload(sftp, localPath, remotePath);
+
+        const response = await enquirer.remove();
+
         if (response) {
           await deleteDirectory(sftp, remotePath);
         }
+
         await this.upload(sftp, localPath, remotePath);
       } catch (error) {
         console.log(chalk.red(error));
@@ -140,5 +138,3 @@ class WebpackAutoDeploy {
     return value !== null && typeof value === "object" && !Array.isArray(value);
   }
 }
-
-export default WebpackAutoDeploy;

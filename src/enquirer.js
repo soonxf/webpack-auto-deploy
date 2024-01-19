@@ -1,4 +1,3 @@
-import utils from "./utils.js";
 import enquirer from "enquirer";
 
 export const connect = async () => {

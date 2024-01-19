@@ -4,6 +4,7 @@ import _fs from "fs";
 import ora from "ora";
 import archiver from "archiver";
 import path from "path";
+import { join } from "path";
 import chalk from "chalk";
 import { promisify } from "util";
 import enquirer from "./enquirer.js";
@@ -21,6 +22,22 @@ export const splitArrayIntoChunks = (array, chunkSize = 100) => {
     result.push(chunk);
   }
   return result;
+};
+
+export const checkFileExists = async filePath => {
+  try {
+    await fs.access(filePath);
+    // 如果没有错误，文件存在
+    return true;
+  } catch (error) {
+    if (error.code === "ENOENT") {
+      // 文件不存在
+      return false;
+    } else {
+      // 其他错误，可能需要进一步处理
+      throw error;
+    }
+  }
 };
 
 export const uploadDirectory = async (sftp, localPath, remotePath) => {
@@ -121,9 +138,25 @@ export const uploadDirectory = async (sftp, localPath, remotePath) => {
 };
 
 export const backup = (Client, fileName, remotePath) => {
-  return new Promise((resolve, reject) => {
+  return new Promise(async (resolve, reject) => {
+    const sftpSync = promisify(Client.sftp.bind(Client));
+
+    const sftp = await sftpSync();
+
+    const response = await mkdirRemotePath(Client, sftp, remotePath);
+
+    if (response === 2) return resolve(2);
+
+    if (response === 0) return resolve(0);
+
+    const _response = await enquirer.backup();
+
+    if (!_response) return resolve(true);
+
     const targetFiles = remotePath.split(/[\\/]+/).pop();
+
     const spinner = ora("服务器正在备份...\n").start();
+
     try {
       Client.exec(`cd ${remotePath};cd ../;tar -czvf ${fileName} ${targetFiles}`, (err, stream) => {
         if (!!err) return resolve(false);
@@ -132,17 +165,17 @@ export const backup = (Client, fileName, remotePath) => {
         stream.on("close", (code, signal) => {
           if (code === 0) {
             spinner.succeed(chalk.green("备份成功"));
-            resolve(true);
+            resolve(1);
           } else {
             spinner.fail(chalk.red("备份失败"));
-            resolve(true);
+            resolve(1);
           }
         });
       });
     } catch (error) {
       spinner.fail(chalk.red(error));
       Client.end();
-      resolve(false);
+      resolve(1);
     }
   });
 };
@@ -292,7 +325,7 @@ export const deleteDirectory = async (sftp, remotePath) => {
   _spinner.succeed(chalk.green(`删除结束 耗时:${((endTime - startTime) / 1000 / 60).toFixed(3)} 分钟`));
 };
 
-export const mkdirRemotePath = async (sftp, remotePath) => {
+export const mkdirRemotePath = async (Client, sftp, remotePath) => {
   const statSync = promisify(sftp.stat.bind(sftp));
   const mkdirSync = promisify(sftp.mkdir.bind(sftp));
   const _posixJoin = path.posix.join(remotePath);
@@ -301,17 +334,19 @@ export const mkdirRemotePath = async (sftp, remotePath) => {
     .then(() => true)
     .catch(() => false);
 
-  if (!isExist) {
-    const response = await enquirer.mkdirRemotePath();
-    if (response) {
-      const _response = await mkdirSync(_posixJoin);
-      if (_response === undefined) {
-        console.log(chalk.green(`远程目录 ${remotePath} 创建成功`));
-      }
-    }
-  }
+  if (isExist) return 1;
 
-  return isExist;
+  const response = await enquirer.mkdirRemotePath();
+  if (response) {
+    const _response = await mkdirSync(_posixJoin);
+    if (_response === undefined) {
+      console.log(chalk.green(`远程目录 ${remotePath} 创建成功`));
+      return 0;
+    }
+  } else {
+    Client.end();
+    return 2;
+  }
 };
 
 export const outputStatistics = (type, statistics) => {
@@ -322,6 +357,102 @@ export const outputStatistics = (type, statistics) => {
       )} MB\n`,
     ),
   );
+};
+
+export const readJson = async filePath => {
+  const file = await fs.readFile(filePath, { encoding: "utf8" });
+  const json = JSON.parse(file);
+  return json;
+};
+
+export const formatConfig = config => {
+  return Object.keys(config).map((item, index) => {
+    const privateKey = config[item].serverOptions.privateKey === undefined;
+    return {
+      ...config[item],
+      appName: item,
+      localPath: join(process.cwd(), config[item].localPath),
+      serverOptions: {
+        ...config[item].serverOptions,
+        password: privateKey ? config[item].serverOptions.password : undefined,
+        privateKey: privateKey ? undefined : join(process.cwd(), config[item].serverOptions.privateKey),
+      },
+    };
+  });
+};
+
+export const delay = (time = 500, callBack) => {
+  return new Promise(resolve => {
+    let timer = setTimeout(() => resolve(timer), time);
+  }).then(response => {
+    response && clearTimeout(response);
+    callBack?.();
+  });
+};
+
+export const generateTemplateConfig = async filePath => {
+  const spinner = ora(chalk.green("正在生成配置文件模板...")).start();
+
+  await delay(3000);
+
+  const config = await fs.writeFile(
+    filePath,
+    JSON.stringify(
+      {
+        appName_1: {
+          compress: true,
+          environment: "dev",
+          localPath: "./pkg",
+          remotePath: "/home/backup",
+          serverOptions: {
+            host: "192.168.1.1",
+            port: "22",
+            username: "root",
+            password: "12345678",
+          },
+        },
+        appName_2: {
+          compress: true,
+          environment: "test",
+          localPath: "./pkg",
+          remotePath: "/home/backup",
+          serverOptions: {
+            host: "192.168.1.2",
+            port: "22",
+            username: "root",
+            password: "12345678",
+            passphrase: "12345678",
+            privateKey: "./rsa.txt",
+          },
+        },
+        appName_3: {
+          compress: true,
+          environment: "prod",
+          localPath: "./pkg",
+          remotePath: "/home/backup",
+          serverOptions: {
+            host: "192.168.1.3",
+            port: "22",
+            username: "root",
+            password: "12345678",
+            passphrase: "12345678",
+            privateKey: "./rsa.txt",
+          },
+        },
+      },
+      null,
+      2,
+    ),
+    { encoding: "utf8" },
+  );
+
+  spinner.succeed(chalk.green("配置文件模板生成成功\n"));
+  spinner.succeed(chalk.green(`配置文件 ${filePath}\n`));
+  spinner.succeed(chalk.green(`请修改配置后重新执行命令\n`));
+
+  await delay(1000);
+
+  return config;
 };
 
 Object.defineProperty(Date.prototype, "__format", {
@@ -356,7 +487,7 @@ Object.defineProperty(String, "__generateRandomString", {
           .toString(36)
           .substring(2, length + 2)
           .padEnd(length, "0")
-      : generateRandomString(11) + generateRandomString(length - 11);
+      : String.__generateRandomString(11) + String.__generateRandomString(length - 11);
   },
   writable: false,
   configurable: false,
@@ -370,4 +501,8 @@ export default {
   splitArrayIntoChunks,
   backup,
   mkdirRemotePath,
+  checkFileExists,
+  readJson,
+  formatConfig,
+  generateTemplateConfig,
 };

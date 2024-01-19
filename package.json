@@ -1,11 +1,11 @@
 {
   "name": "webpack-auto-deploy",
-  "version": "3.0.0",
+  "version": "3.6.0",
   "description": "ssh 和 sftp 自动上传插件",
   "main": "./src/index.js",
   "type": "module",
-  "scripts": {
-    "serve": "node ./src/index.js"
+  "bin": {
+    "webpack-auto-deploy": "bin/index.js"
   },
   "author": "soonxf",
   "license": "ISC",
