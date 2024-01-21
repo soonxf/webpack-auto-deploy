@@ -10,7 +10,7 @@ import { promisify } from "util";
 import enquirer from "./enquirer.js";
 
 export const isWindowsOrLinuxPath = path => {
-  const windowsRegex = /^[a-zA-Z]:\\(?:[^\\\/:*?"<>|\r\n]+\\)*[^\\\/:*?"<>|\r\n]*$/;
+  const windowsRegex = /^[a-zA-Z]:[\/\\](?:[^\\\/:*?"<>|\r\n]+[\/\\])*[^\\\/:*?"<>|\r\n]*$/;
   const linuxRegex = /^(\/[^\/:*?"<>|\r\n]+)+\/?$/;
   return windowsRegex.test(path) || linuxRegex.test(path);
 };
@@ -153,23 +153,26 @@ export const backup = (Client, fileName, remotePath) => {
 
     if (!_response) return resolve(true);
 
-    const targetFiles = remotePath.split(/[\\/]+/).pop();
+    const remoteDirName = path.basename(remotePath);
+    const remoteDirPath = path.dirname(remotePath);
+    const remoteFilePath = path.normalize(path.join(remoteDirPath, fileName)).replace(/\\/g, "/");
 
     const spinner = ora("服务器正在备份...\n").start();
 
     try {
-      Client.exec(`cd ${remotePath};cd ../;tar -czvf ${fileName} ${targetFiles}`, (err, stream) => {
-        if (!!err) return resolve(false);
+      const tarCommand = `tar -czvf ${remoteFilePath} -C ${remoteDirPath} ${remoteDirName}`;
+
+      Client.exec(tarCommand, (err, stream) => {
+        if (!!err) return resolve(1);
         stream.on("data", data => {});
         stream.stderr.on("data", data => {});
         stream.on("close", (code, signal) => {
           if (code === 0) {
             spinner.succeed(chalk.green("备份成功"));
-            resolve(1);
-          } else {
-            spinner.fail(chalk.red("备份失败"));
-            resolve(1);
+            return resolve(1);
           }
+          spinner.fail(chalk.red("备份失败"));
+          resolve(1);
         });
       });
     } catch (error) {
@@ -178,6 +181,9 @@ export const backup = (Client, fileName, remotePath) => {
       resolve(1);
     }
   });
+};
+export const toNormalize = _path => {
+  return path.normalize(_path ?? "").replace(/\\/g, "/");
 };
 
 export const compress = (fileName, localPath) => {

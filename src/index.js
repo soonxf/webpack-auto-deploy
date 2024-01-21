@@ -4,7 +4,17 @@ import chalk from "chalk";
 import enquirer from "./enquirer.js"; // 确保 enquirer.js 支持 ESM
 import { promisify } from "util";
 import { Client } from "ssh2";
-import { isWindowsOrLinuxPath, deleteDirectory, uploadDirectory, backup, compress, mkdirRemotePath } from "./utils.js";
+import { join } from "path";
+
+import {
+  isWindowsOrLinuxPath,
+  toNormalize,
+  deleteDirectory,
+  uploadDirectory,
+  backup,
+  compress,
+  mkdirRemotePath,
+} from "./utils.js";
 
 // import { fileURLToPath } from "url";
 // import { resolve, dirname } from "path";
@@ -27,7 +37,12 @@ export default class WebpackAutoDeploy {
 
     if (option === undefined) return;
 
-    this.options = option;
+    this.options = {
+      ...option,
+      localPath: toNormalize(option.localPath),
+      remotePath: toNormalize(option.remotePath),
+    };
+
     this.Client = new Client();
 
     const { appName, environment } = this.options;
@@ -71,7 +86,7 @@ export default class WebpackAutoDeploy {
         username,
         password,
         passphrase,
-        privateKey: privateKey ? fs.readFileSync(privateKey) : undefined,
+        privateKey: privateKey ? fs.readFileSync(toNormalize(privateKey)) : undefined,
       });
 
       this.Client.on("ready", async (err, stream) => {
@@ -94,7 +109,7 @@ export default class WebpackAutoDeploy {
 
     if (!isWindowsOrLinuxPath(remotePath)) {
       this.Client.end();
-      console.log(chalk.red(`${remotePath}不是一个合法的路径`));
+      console.log(chalk.red(`${remotePath} 不是一个合法的路径`));
       return;
     }
 
