@@ -1,6 +1,6 @@
 {
   "name": "webpack-auto-deploy",
-  "version": "3.6.0",
+  "version": "5.2.0",
   "description": "ssh 和 sftp 自动上传插件",
   "main": "./src/index.js",
   "type": "module",
@@ -15,5 +15,8 @@
     "enquirer": "^2.4.1",
     "ora": "^8.0.1",
     "ssh2": "^1.15.0"
+  },
+  "engines": {
+    "node": ">=10.16.0"
   }
 }

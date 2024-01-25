@@ -1,11 +1,10 @@
 #!/usr/bin/env node
 
-import fs from "fs/promises";
 import utils from "../src/utils.js";
 import WebpackAutoDeploy from "../src/index.js";
 
 import { fileURLToPath } from "url";
-import { resolve, dirname, join } from "path";
+import { dirname, join } from "path";
 
 // 获取当前文件的路径
 const __filename = fileURLToPath(import.meta.url);

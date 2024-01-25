@@ -1,47 +1,21 @@
 // 使用 ESM 导入语法
-import fs from "fs/promises";
-import _fs from "fs";
+import { existsSync, mkdirSync, createWriteStream, promises } from "fs";
 import ora from "ora";
 import archiver from "archiver";
-import path from "path";
-import { join } from "path";
+import { join, isAbsolute, dirname, posix, basename, normalize } from "path";
 import chalk from "chalk";
 import { promisify } from "util";
+import { fileURLToPath } from "url";
 import enquirer from "./enquirer.js";
 
-export const isWindowsOrLinuxPath = path => {
-  const windowsRegex = /^[a-zA-Z]:[\/\\](?:[^\\\/:*?"<>|\r\n]+[\/\\])*[^\\\/:*?"<>|\r\n]*$/;
-  const linuxRegex = /^(\/[^\/:*?"<>|\r\n]+)+\/?$/;
-  return windowsRegex.test(path) || linuxRegex.test(path);
-};
-
-export const splitArrayIntoChunks = (array, chunkSize = 100) => {
-  let result = [];
-  for (let i = 0; i < array.length; i += chunkSize) {
-    let chunk = array.slice(i, i + chunkSize);
-    result.push(chunk);
-  }
-  return result;
-};
-
-export const checkFileExists = async filePath => {
-  try {
-    await fs.access(filePath);
-    // 如果没有错误，文件存在
-    return true;
-  } catch (error) {
-    if (error.code === "ENOENT") {
-      // 文件不存在
-      return false;
-    } else {
-      // 其他错误，可能需要进一步处理
-      throw error;
-    }
-  }
-};
+// 获取当前文件的路径
+const __filename = fileURLToPath(import.meta.url);
+// 获取当前文件所在目录的路径
+const __dirname = dirname(__filename);
 
 export const uploadDirectory = async (sftp, localPath, remotePath) => {
   const _spinner = ora("服务器正在上传...\n");
+
   try {
     const mkdirSync = promisify(sftp.mkdir.bind(sftp));
     const fastPutSync = promisify(sftp.fastPut.bind(sftp));
@@ -63,12 +37,12 @@ export const uploadDirectory = async (sftp, localPath, remotePath) => {
         directory: [],
         file: [],
       };
-      const _mapPath = path.posix.join(mapPath);
-      const files = await fs.readdir(_mapPath);
+      const _mapPath = posix.join(mapPath);
+      const files = await promises.readdir(_mapPath);
       for (const item of files) {
-        const _join = path.join(_mapPath, item);
-        const _posixJoin = path.posix.join(remotePath, item);
-        const stats = await fs.stat(_join);
+        const _join = join(_mapPath, item);
+        const _posixJoin = posix.join(remotePath, item);
+        const stats = await promises.stat(_join);
         if (stats.isDirectory()) {
           uploadSize.directory.size += stats.size;
           uploadSize.directory.num += 1;
@@ -116,17 +90,9 @@ export const uploadDirectory = async (sftp, localPath, remotePath) => {
 
     const startTime = Date.now();
 
-    for (const item of splitArrayIntoChunks(fileList.directory)) {
-      const response = await Promise.all(item.map(item => item()));
+    await processTask(_spinner, fileList.directory, "directory", "upload");
 
-      response.forEach(item => item.success === false && _spinner.fail(chalk.red(`文件夹:${item.path} 创建失败\n`)));
-    }
-
-    for (const item of splitArrayIntoChunks(fileList.file)) {
-      const response = await Promise.all(item.map(item => item()));
-
-      response.forEach(item => item.success === false && _spinner.fail(chalk.red(`文件:${item.path} 上传失败\n`)));
-    }
+    await processTask(_spinner, fileList.file, "file", "upload");
 
     const endTime = Date.now();
 
@@ -135,107 +101,6 @@ export const uploadDirectory = async (sftp, localPath, remotePath) => {
     _spinner.succeed(chalk.red("上传失败\n"));
     console.warn(chalk.red(error));
   }
-};
-
-export const backup = (Client, fileName, remotePath) => {
-  return new Promise(async (resolve, reject) => {
-    const sftpSync = promisify(Client.sftp.bind(Client));
-
-    const sftp = await sftpSync();
-
-    const response = await mkdirRemotePath(Client, sftp, remotePath);
-
-    if (response === 2) return resolve(2);
-
-    if (response === 0) return resolve(0);
-
-    const _response = await enquirer.backup();
-
-    if (!_response) return resolve(true);
-
-    const remoteDirName = path.basename(remotePath);
-    const remoteDirPath = path.dirname(remotePath);
-    const remoteFilePath = path.normalize(path.join(remoteDirPath, fileName)).replace(/\\/g, "/");
-
-    const spinner = ora("服务器正在备份...\n").start();
-
-    try {
-      const tarCommand = `tar -czvf ${remoteFilePath} -C ${remoteDirPath} ${remoteDirName}`;
-
-      Client.exec(tarCommand, (err, stream) => {
-        if (!!err) return resolve(1);
-        stream.on("data", data => {});
-        stream.stderr.on("data", data => {});
-        stream.on("close", (code, signal) => {
-          if (code === 0) {
-            spinner.succeed(chalk.green("备份成功"));
-            return resolve(1);
-          }
-          spinner.fail(chalk.red("备份失败"));
-          resolve(1);
-        });
-      });
-    } catch (error) {
-      spinner.fail(chalk.red(error));
-      Client.end();
-      resolve(1);
-    }
-  });
-};
-export const toNormalize = _path => {
-  return path.normalize(_path ?? "").replace(/\\/g, "/");
-};
-
-export const compress = (fileName, localPath) => {
-  return new Promise((resolve, reject) => {
-    // 确保输出文件的路径是正确的
-    const lastPath = `${localPath
-      .split(/[\\/]+/)
-      .filter(item => item !== "")
-      .pop()}_`;
-
-    const outputPath = path.join(localPath, "../", lastPath, fileName.replace(".tar.gz", ".zip"));
-
-    const dirname = path.join(localPath, "../", lastPath);
-
-    if (_fs.existsSync(dirname) === false) {
-      _fs.mkdirSync(dirname);
-    }
-
-    const output = _fs.createWriteStream(outputPath);
-
-    const archive = archiver("zip", {
-      zlib: { level: 9 }, // 设置压缩级别
-    });
-
-    output.on("close", function () {
-      resolve(outputPath); // 返回压缩文件的路径
-    });
-
-    archive.on("warning", function (err) {
-      if (err.code === "ENOENT") {
-        console.warn(err);
-      } else {
-        reject(err);
-      }
-    });
-
-    archive.on("error", function (err) {
-      reject(err);
-    });
-
-    archive.pipe(output);
-
-    // 递归地添加目录到归档中
-    archive.directory(localPath, false);
-
-    // 完成归档
-    archive.finalize();
-  });
-};
-
-export const bytesToMB = bytes => {
-  return (bytes / 1024 / 1024).toFixed(2);
 };
 
 export const deleteDirectory = async (sftp, remotePath) => {
@@ -262,7 +127,7 @@ export const deleteDirectory = async (sftp, remotePath) => {
   const _deleteDirectory = async itemPath => {
     const files = await readdirSync(itemPath);
     for (const item of files) {
-      const _itemPath = path.posix.join(itemPath, item.filename);
+      const _itemPath = posix.join(itemPath, item.filename);
 
       if (item.attrs.isDirectory()) {
         await _deleteDirectory(_itemPath);
@@ -315,26 +180,66 @@ export const deleteDirectory = async (sftp, remotePath) => {
 
   const _spinner = ora("服务器正在删除...\n").start();
 
-  for (const item of splitArrayIntoChunks(fileList.file)) {
-    const response = await Promise.all(item.map(item => item()));
+  await processTask(_spinner, fileList.file, "file", "delete");
 
-    response.forEach(item => item.success === false && spinner.fail(chalk.red(`文件:${item.path} 删除失败\n`)));
-  }
-  for (const item of splitArrayIntoChunks(fileList.directory)) {
-    const response = await Promise.all(item.map(item => item()));
-
-    response.forEach(item => item.success === false && spinner.fail(chalk.red(`目录:${item.path} 删除失败\n`)));
-  }
+  await processTask(_spinner, fileList.directory, "directory", "delete");
 
   const endTime = Date.now();
 
   _spinner.succeed(chalk.green(`删除结束 耗时:${((endTime - startTime) / 1000 / 60).toFixed(3)} 分钟`));
 };
 
+export const backup = (Client, fileName, remotePath) => {
+  return new Promise(async (resolve, reject) => {
+    const sftpSync = promisify(Client.sftp.bind(Client));
+
+    const sftp = await sftpSync();
+
+    const response = await mkdirRemotePath(Client, sftp, remotePath);
+
+    if (response === 2) return resolve(2);
+
+    if (response === 0) return resolve(0);
+
+    const _response = await enquirer.backup();
+
+    if (!_response) return resolve(true);
+
+    const remoteDirName = basename(remotePath);
+    const remoteDirPath = dirname(remotePath);
+    const remoteFilePath = normalize(join(remoteDirPath, fileName)).replace(/\\/g, "/");
+
+    const spinner = ora("服务器正在备份...\n").start();
+
+    try {
+      const tarCommand = `tar -czvf ${remoteFilePath} -C ${remoteDirPath} ${remoteDirName}`;
+
+      Client.exec(tarCommand, (err, stream) => {
+        if (!!err) return resolve(1);
+        stream.on("data", data => {});
+        stream.stderr.on("data", data => {});
+        stream.on("close", (code, signal) => {
+          if (code === 0) {
+            spinner.succeed(chalk.green("备份成功"));
+            resolve(1);
+            return;
+          }
+          spinner.fail(chalk.red("备份失败"));
+          resolve(1);
+        });
+      });
+    } catch (error) {
+      spinner.fail(chalk.red(error));
+      Client.end();
+      resolve(1);
+    }
+  });
+};
+
 export const mkdirRemotePath = async (Client, sftp, remotePath) => {
   const statSync = promisify(sftp.stat.bind(sftp));
   const mkdirSync = promisify(sftp.mkdir.bind(sftp));
-  const _posixJoin = path.posix.join(remotePath);
+  const _posixJoin = posix.join(remotePath);
 
   const isExist = await statSync(_posixJoin)
     .then(() => true)
@@ -355,6 +260,34 @@ export const mkdirRemotePath = async (Client, sftp, remotePath) => {
   }
 };
 
+export const compress = (fileName, localPath) => {
+  return new Promise((resolve, reject) => {
+    const _localPath = basename(toNormalize(localPath));
+    const _dirname = dirname(localPath);
+    const lastPath = join(_dirname, `${_localPath}_`);
+
+    const outputPath = join(
+      isAbsolute(lastPath) ? lastPath : join(process.cwd(), lastPath),
+      fileName.replace(".tar.gz", ".zip"),
+    );
+
+    if (existsSync(lastPath) === false) mkdirSync(lastPath);
+
+    const output = createWriteStream(outputPath);
+
+    const archive = archiver("zip", {
+      zlib: { level: 1 }, // 设置压缩级别
+    });
+
+    output.on("close", () => resolve(outputPath));
+    archive.on("warning", err => (err.code === "ENOENT" ? console.warn(err) : reject(err)));
+    archive.on("error", err => reject(err));
+    archive.pipe(output);
+    archive.directory(localPath, false);
+    archive.finalize();
+  });
+};
+
 export const outputStatistics = (type, statistics) => {
   console.log(
     chalk.green(
@@ -366,9 +299,59 @@ export const outputStatistics = (type, statistics) => {
 };
 
 export const readJson = async filePath => {
-  const file = await fs.readFile(filePath, { encoding: "utf8" });
+  const file = await promises.readFile(filePath, { encoding: "utf8" });
   const json = JSON.parse(file);
   return json;
+};
+
+export const processTask = async (_spinner, items, itemType, taskType = "upload") => {
+  const message = {
+    upload: ["创建", "上传"],
+    delete: ["删除", "删除"],
+  };
+
+  const splitArrayIntoChunks = (array, chunkSize = 100) => {
+    let result = [];
+    for (let i = 0; i < array.length; i += chunkSize) {
+      let chunk = array.slice(i, i + chunkSize);
+      result.push(chunk);
+    }
+    return result;
+  };
+
+  for (const chunk of splitArrayIntoChunks(items)) {
+    const responses = await Promise.all(chunk.map(item => item()));
+    responses.forEach(item => {
+      if (item.success === false) {
+        const typeText = itemType === "directory" ? "文件夹" : "文件";
+        _spinner.fail(
+          chalk.red(
+            `${typeText}:${item.path} ${itemType === "directory" ? message[taskType][0] : message[taskType][0]}失败\n`,
+          ),
+        );
+      }
+    });
+  }
+};
+
+export const generateTemplateConfig = async filePath => {
+  const spinner = ora(chalk.green("正在生成配置文件模板...")).start();
+
+  const json = await readJson(join(__dirname, "../", "./webpack.deploy.json"));
+
+  await delay(2000);
+
+  const config = await promises.writeFile(filePath, JSON.stringify(json, null, 3), {
+    encoding: "utf8",
+  });
+
+  spinner.succeed(chalk.green("配置文件模板生成成功\n"));
+  spinner.succeed(chalk.green(`配置文件 ${filePath}\n`));
+  spinner.succeed(chalk.green(`请修改配置后重新执行命令\n`));
+
+  await delay(1000);
+
+  return config;
 };
 
 export const formatConfig = config => {
@@ -377,11 +360,13 @@ export const formatConfig = config => {
     return {
       ...config[item],
       appName: item,
-      localPath: join(process.cwd(), config[item].localPath),
+      localPath: join(isAbsolute(process.cwd()) ? "" : process.cwd(), config[item].localPath),
       serverOptions: {
         ...config[item].serverOptions,
         password: privateKey ? config[item].serverOptions.password : undefined,
-        privateKey: privateKey ? undefined : join(process.cwd(), config[item].serverOptions.privateKey),
+        privateKey: privateKey
+          ? undefined
+          : join(isAbsolute(process.cwd()) ? "" : process.cwd(), config[item].serverOptions.privateKey),
       },
     };
   });
@@ -396,69 +381,32 @@ export const delay = (time = 500, callBack) => {
   });
 };
 
-export const generateTemplateConfig = async filePath => {
-  const spinner = ora(chalk.green("正在生成配置文件模板...")).start();
+export const isObject = value => {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+};
 
-  await delay(3000);
+export const isWindowsOrLinuxPath = path => {
+  const windowsRegex = /^[a-zA-Z]:[\/\\](?:[^\\\/:*?"<>|\r\n]+[\/\\])*[^\\\/:*?"<>|\r\n]*$/;
+  const linuxRegex = /^(\/[^\/:*?"<>|\r\n]+)+\/?$/;
+  return windowsRegex.test(path) || linuxRegex.test(path);
+};
 
-  const config = await fs.writeFile(
-    filePath,
-    JSON.stringify(
-      {
-        appName_1: {
-          compress: true,
-          environment: "dev",
-          localPath: "./pkg",
-          remotePath: "/home/backup",
-          serverOptions: {
-            host: "192.168.1.1",
-            port: "22",
-            username: "root",
-            password: "12345678",
-          },
-        },
-        appName_2: {
-          compress: true,
-          environment: "test",
-          localPath: "./pkg",
-          remotePath: "/home/backup",
-          serverOptions: {
-            host: "192.168.1.2",
-            port: "22",
-            username: "root",
-            password: "12345678",
-            passphrase: "12345678",
-            privateKey: "./rsa.txt",
-          },
-        },
-        appName_3: {
-          compress: true,
-          environment: "prod",
-          localPath: "./pkg",
-          remotePath: "/home/backup",
-          serverOptions: {
-            host: "192.168.1.3",
-            port: "22",
-            username: "root",
-            password: "12345678",
-            passphrase: "12345678",
-            privateKey: "./rsa.txt",
-          },
-        },
-      },
-      null,
-      2,
-    ),
-    { encoding: "utf8" },
-  );
+export const checkFileExists = async filePath => {
+  try {
+    await promises.access(filePath);
+    return true;
+  } catch (error) {
+    if (error.code === "ENOENT") return false;
+    throw error;
+  }
+};
 
-  spinner.succeed(chalk.green("配置文件模板生成成功\n"));
-  spinner.succeed(chalk.green(`配置文件 ${filePath}\n`));
-  spinner.succeed(chalk.green(`请修改配置后重新执行命令\n`));
+export const bytesToMB = bytes => {
+  return (bytes / 1024 / 1024).toFixed(2);
+};
 
-  await delay(1000);
-
-  return config;
+export const toNormalize = _path => {
+  return normalize(_path ?? "").replace(/\\/g, "/");
 };
 
 Object.defineProperty(Date.prototype, "__format", {
@@ -504,11 +452,11 @@ export default {
   bytesToMB,
   deleteDirectory,
   outputStatistics,
-  splitArrayIntoChunks,
   backup,
   mkdirRemotePath,
   checkFileExists,
   readJson,
   formatConfig,
   generateTemplateConfig,
+  isObject,
 };

@@ -1,10 +1,9 @@
-import fs from "fs";
+import { promises } from "fs";
 import ora from "ora";
 import chalk from "chalk";
 import enquirer from "./enquirer.js"; // 确保 enquirer.js 支持 ESM
 import { promisify } from "util";
 import { Client } from "ssh2";
-import { join } from "path";
 
 import {
   isWindowsOrLinuxPath,
@@ -13,7 +12,7 @@ import {
   uploadDirectory,
   backup,
   compress,
-  mkdirRemotePath,
+  isObject,
 } from "./utils.js";
 
 // import { fileURLToPath } from "url";
@@ -33,7 +32,7 @@ export default class WebpackAutoDeploy {
     this.initApp(options);
   }
   async initApp(options) {
-    const option = await enquirer.selectEnv(this.isObject(options) ? [options] : options);
+    const option = await enquirer.selectEnv(isObject(options) ? [options] : options);
 
     if (option === undefined) return;
 
@@ -46,7 +45,9 @@ export default class WebpackAutoDeploy {
     this.Client = new Client();
 
     const { appName, environment } = this.options;
-    const fileName = `backups_${appName}_${environment}_${String.__generateRandomString()}.tar.gz`;
+    const fileName = `backups_${appName}_${environment}_${new Date().__format(
+      "yyyy_MM_dd_hh_mm_ss",
+    )}_${String.__generateRandomString()}.tar.gz`;
     this.fileName = fileName;
 
     const { compress: _compress } = this.options;
@@ -86,7 +87,7 @@ export default class WebpackAutoDeploy {
         username,
         password,
         passphrase,
-        privateKey: privateKey ? fs.readFileSync(toNormalize(privateKey)) : undefined,
+        privateKey: privateKey ? await promises.readFile(toNormalize(privateKey)) : undefined,
       });
 
       this.Client.on("ready", async (err, stream) => {
@@ -95,10 +96,10 @@ export default class WebpackAutoDeploy {
           spinner.fail(chalk.red("连接失败"));
         } else {
           spinner.succeed(chalk.green("连接成功"));
-
           await this.execBackup();
         }
       });
+
       this.Client.on("error", err => spinner.fail(chalk.red(err)));
     } catch (error) {
       spinner.fail(chalk.red(error));
@@ -134,9 +135,7 @@ export default class WebpackAutoDeploy {
 
         const response = await enquirer.remove();
 
-        if (response) {
-          await deleteDirectory(sftp, remotePath);
-        }
+        if (response) await deleteDirectory(sftp, remotePath);
 
         await this.upload(sftp, localPath, remotePath);
       } catch (error) {
@@ -148,8 +147,5 @@ export default class WebpackAutoDeploy {
   async upload(sftp, localPath, remotePath) {
     await uploadDirectory(sftp, localPath, remotePath);
     this.Client.end();
-  }
-  isObject(value) {
-    return value !== null && typeof value === "object" && !Array.isArray(value);
   }
 }
