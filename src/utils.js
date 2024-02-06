@@ -14,165 +14,151 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 export const uploadDirectory = async (sftp, localPath, remotePath) => {
-  const _spinner = ora("服务器正在上传...\n");
-
   try {
-    const mkdirSync = promisify(sftp.mkdir.bind(sftp));
-    const fastPutSync = promisify(sftp.fastPut.bind(sftp));
-    const statSync = promisify(sftp.stat.bind(sftp));
+    // Promisify SFTP操作
+    const makeDir = promisify(sftp.mkdir.bind(sftp));
+    const fastPut = promisify(sftp.fastPut.bind(sftp));
+    const checkStat = promisify(sftp.stat.bind(sftp));
 
-    const uploadSize = {
-      directory: {
-        num: 0,
-        size: 0,
-      },
-      file: {
-        num: 0,
-        size: 0,
-      },
+    // 用于统计上传进度的对象
+    const uploadStats = { directory: { count: 0, size: 0 }, file: { count: 0, size: 0 } };
+
+    const uploadDirectoryEntry = async (remotePath, statFunc, mkdirFunc) => {
+      try {
+        const exists = await statFunc(remotePath)
+          .then(() => true)
+          .catch(() => false);
+
+        if (!exists) {
+          const result = await mkdirFunc(remotePath);
+          return { success: result === undefined, path: remotePath };
+        }
+        return { success: true, path: remotePath };
+      } catch (error) {
+        return { success: false, path: remotePath };
+      }
     };
 
-    const _uploadDirectory = async (mapPath, remotePath) => {
-      const fileList = {
-        directory: [],
-        file: [],
-      };
-      const _mapPath = posix.join(mapPath);
-      const files = await promises.readdir(_mapPath);
-      for (const item of files) {
-        const _join = join(_mapPath, item);
-        const _posixJoin = posix.join(remotePath, item);
-        const stats = await promises.stat(_join);
+    const uploadFileEntry = async (localFilePath, remoteFilePath) => {
+      try {
+        const response = await fastPut(localFilePath, remoteFilePath);
+        return {
+          success: response === undefined ? true : false,
+          path: remoteFilePath,
+        };
+      } catch {
+        return { success: false, path: remoteFilePath };
+      }
+    };
+
+    // 递归上传目录的内部函数
+    const recursiveUpload = async (_localPath, _remotePath) => {
+      // File removal tracker
+      const fileList = { directory: [], file: [] };
+
+      const localFiles = await promises.readdir(_localPath);
+
+      for (const file of localFiles) {
+        const localFilePath = join(_localPath, file);
+        const remoteFilePath = posix.join(_remotePath, file);
+        const stats = await promises.stat(localFilePath);
+
         if (stats.isDirectory()) {
-          uploadSize.directory.size += stats.size;
-          uploadSize.directory.num += 1;
-          fileList.directory.push(async () => {
-            const isExist = await statSync(_posixJoin)
-              .then(() => true)
-              .catch(() => false);
+          // 如果是目录，递归处理
+          uploadStats.directory.size += stats.size;
+          uploadStats.directory.count += 1;
+          fileList.directory.push(async () => await uploadDirectoryEntry(remoteFilePath, checkStat, makeDir));
 
-            if (isExist) {
-              return {
-                success: true,
-                path: _posixJoin,
-              };
-            }
-
-            const response = await mkdirSync(_posixJoin);
-            return {
-              success: response === undefined ? true : false,
-              path: _posixJoin,
-            };
-          });
-          const _fileList = await _uploadDirectory(_join, _posixJoin);
-          fileList.directory = fileList.directory.concat(_fileList.directory);
-          fileList.file = fileList.file.concat(_fileList.file);
+          // 进行嵌套上传并合并结果
+          const nestedFiles = await recursiveUpload(localFilePath, remoteFilePath);
+          fileList.directory.push(...nestedFiles.directory);
+          fileList.file.push(...nestedFiles.file);
         } else {
-          uploadSize.file.size += stats.size;
-          uploadSize.file.num += 1;
-          fileList.file.push(async () => {
-            const response = await fastPutSync(_join, _posixJoin);
-            return {
-              success: response === undefined ? true : false,
-              path: _posixJoin,
-            };
-          });
+          // 如果是文件，添加到上传列表
+          uploadStats.file.size += stats.size;
+          uploadStats.file.count += 1;
+          fileList.file.push(async () => await uploadFileEntry(localFilePath, remoteFilePath));
         }
       }
+
       return fileList;
     };
 
-    const fileList = await _uploadDirectory(localPath, remotePath);
+    const taskQueue = await recursiveUpload(localPath, remotePath);
 
-    outputStatistics("待上传", uploadSize);
+    outputStatistics("待上传", uploadStats); // 输出待上传统计信息
 
-    _spinner.start();
+    // 显示上传状态的动态标识
+    const spinner = ora("服务器正在上传...\n").start();
 
     const startTime = Date.now();
 
-    await processTask(_spinner, fileList.directory, "directory", "upload");
-
-    await processTask(_spinner, fileList.file, "file", "upload");
+    (await processTask(taskQueue.directory, "directory", "upload")).map(item => console.log(item));
+    (await processTask(taskQueue.file, "file", "upload")).map(item => console.log(item));
 
     const endTime = Date.now();
 
-    _spinner.succeed(chalk.green(`上传结束 耗时:${((endTime - startTime) / 1000 / 60).toFixed(3)} 分钟\n`));
+    spinner.succeed(chalk.green(`上传结束 耗时:${((endTime - startTime) / 1000 / 60).toFixed(3)} 分钟\n`));
   } catch (error) {
-    _spinner.succeed(chalk.red("上传失败\n"));
-    console.warn(chalk.red(error));
+    console.log(chalk.red("上传失败\n"));
+    console.error(chalk.red(error));
+    throw error;
   }
 };
 
 export const deleteDirectory = async (sftp, remotePath) => {
-  const readdirSync = promisify(sftp.readdir.bind(sftp));
-  const rmdirSync = promisify(sftp.rmdir.bind(sftp));
-  const unlinkSync = promisify(sftp.unlink.bind(sftp));
+  // Promisify sftp methods for asynchronous operation
+  const readdirAsync = promisify(sftp.readdir.bind(sftp));
+  const rmdirAsync = promisify(sftp.rmdir.bind(sftp));
+  const unlinkAsync = promisify(sftp.unlink.bind(sftp));
 
-  const fileList = {
-    directory: [],
-    file: [],
-  };
+  const fileList = { directory: [], file: [] };
 
-  const deleteSize = {
-    directory: {
-      num: 0,
-      size: 0,
-    },
-    file: {
-      num: 0,
-      size: 0,
-    },
-  };
+  const deleteSize = { directory: { count: 0, size: 0 }, file: { count: 0, size: 0 } };
 
-  const _deleteDirectory = async itemPath => {
-    const files = await readdirSync(itemPath);
+  // Recursively delete directories and their contents
+  const recursivelyDelete = async itemPath => {
+    const files = await readdirAsync(itemPath);
+
     for (const item of files) {
-      const _itemPath = posix.join(itemPath, item.filename);
+      const fullPath = posix.join(itemPath, item.filename);
 
       if (item.attrs.isDirectory()) {
-        await _deleteDirectory(_itemPath);
-        deleteSize.directory.num += 1;
-        deleteSize.directory.size += item.attrs.size;
-        fileList.directory.push(async () => {
-          try {
-            const response = await rmdirSync(_itemPath);
-            return {
-              success: response === undefined ? true : false,
-              path: _itemPath,
-            };
-          } catch (error) {
-            return {
-              success: false,
-              path: _itemPath,
-            };
-          }
-        });
+        await recursivelyDelete(fullPath);
+        deleteSize.directory.count++;
+        deleteSize.directory.size += item.attrs.size; // 更新目录大小统计
+        fileList.directory.push(async () => await removeDirectory(fullPath));
       } else {
-        deleteSize.file.num += 1;
-        deleteSize.file.size += item.attrs.size;
-        fileList.file.push(async () => {
-          try {
-            const response = await unlinkSync(_itemPath);
-            return {
-              success: response === undefined ? true : false,
-              path: _itemPath,
-            };
-          } catch (error) {
-            return {
-              success: false,
-              path: _itemPath,
-            };
-          }
-        });
+        deleteSize.file.count++;
+        deleteSize.file.size += item.attrs.size; // 更新文件大小统计
+        fileList.file.push(async () => await removeFile(fullPath));
       }
     }
   };
 
-  const startTime = Date.now();
+  // Remove file and handle result
+  const removeFile = async filePath => {
+    try {
+      const response = await unlinkAsync(filePath);
+      return { success: response === undefined, path: filePath };
+    } catch (error) {
+      return { success: false, path: filePath };
+    }
+  };
+
+  // Remove directory and handle result
+  const removeDirectory = async directoryPath => {
+    try {
+      const response = await rmdirAsync(directoryPath);
+      return { success: response === undefined, path: directoryPath };
+    } catch (error) {
+      return { success: false, path: directoryPath };
+    }
+  };
 
   const spinner = ora("正在统计...\n").start();
 
-  await _deleteDirectory(remotePath);
+  await recursivelyDelete(remotePath);
 
   spinner.succeed(chalk.green("统计结束"));
 
@@ -180,9 +166,10 @@ export const deleteDirectory = async (sftp, remotePath) => {
 
   const _spinner = ora("服务器正在删除...\n").start();
 
-  await processTask(_spinner, fileList.file, "file", "delete");
+  const startTime = Date.now();
 
-  await processTask(_spinner, fileList.directory, "directory", "delete");
+  (await processTask(fileList.file, "file", "delete")).map(item => console.log(item));
+  (await processTask(fileList.directory, "directory", "delete")).map(item => console.log(item));
 
   const endTime = Date.now();
 
@@ -190,46 +177,68 @@ export const deleteDirectory = async (sftp, remotePath) => {
 };
 
 export const backup = (Client, fileName, remotePath) => {
-  return new Promise(async (resolve, reject) => {
-    const sftpSync = promisify(Client.sftp.bind(Client));
+  return new Promise(async resolve => {
+    // 使用promisify工具来创建支持Promise的SFTP操作函数
+    const sftp = await promisify(Client.sftp.bind(Client))();
 
-    const sftp = await sftpSync();
+    // 如果remotePath不存在则创建
+    const pathExists = await mkdirRemotePath(Client, sftp, remotePath);
+    if (pathExists === 2) {
+      resolve(2);
+      return;
+    }
+    if (pathExists === 0) {
+      resolve(0);
+      return;
+    }
 
-    const response = await mkdirRemotePath(Client, sftp, remotePath);
+    // 使用enquirer库查询用户是否希望执行备份
+    const userInput = await enquirer.backup();
+    if (!userInput) {
+      // 用户取消备份操作
+      resolve(true);
+      return;
+    }
 
-    if (response === 2) return resolve(2);
-
-    if (response === 0) return resolve(0);
-
-    const _response = await enquirer.backup();
-
-    if (!_response) return resolve(true);
-
+    // 处理路径，获取备份文件的完整远程路径
     const remoteDirName = basename(remotePath);
     const remoteDirPath = dirname(remotePath);
     const remoteFilePath = normalize(join(remoteDirPath, fileName)).replace(/\\/g, "/");
 
+    // 启动ora spinner，提示用户备份正在进行
     const spinner = ora("服务器正在备份...\n").start();
 
     try {
+      // 构建并执行tar命令以创建备份
       const tarCommand = `tar -czvf ${remoteFilePath} -C ${remoteDirPath} ${remoteDirName}`;
-
       Client.exec(tarCommand, (err, stream) => {
-        if (!!err) return resolve(1);
-        stream.on("data", data => {});
-        stream.stderr.on("data", data => {});
-        stream.on("close", (code, signal) => {
+        if (err) {
+          // 如果执行过程中发生错误，解析Promise并返回1
+          resolve(1);
+          spinner.fail(chalk.red("备份失败"));
+          return;
+        }
+
+        // 监听过程中的数据流，但不执行任何操作，可根据需求进行日志记录
+        stream.on("data", () => {});
+        stream.stderr.on("data", () => {});
+
+        // 当备份过程结束时
+        stream.on("close", code => {
           if (code === 0) {
+            // 如果退出代码为0，备份成功
             spinner.succeed(chalk.green("备份成功"));
             resolve(1);
-            return;
+          } else {
+            // 如果退出代码非0，备份失败
+            spinner.fail(chalk.red("备份失败"));
+            resolve(1);
           }
-          spinner.fail(chalk.red("备份失败"));
-          resolve(1);
         });
       });
     } catch (error) {
-      spinner.fail(chalk.red(error));
+      // 捕获并处理任何异常
+      spinner.fail(chalk.red(error.message));
       Client.end();
       resolve(1);
     }
@@ -237,26 +246,42 @@ export const backup = (Client, fileName, remotePath) => {
 };
 
 export const mkdirRemotePath = async (Client, sftp, remotePath) => {
-  const statSync = promisify(sftp.stat.bind(sftp));
-  const mkdirSync = promisify(sftp.mkdir.bind(sftp));
-  const _posixJoin = posix.join(remotePath);
+  // 将sftp的stat和mkdir方法转换为异步版本
+  const stat = promisify(sftp.stat.bind(sftp));
+  const mkdir = promisify(sftp.mkdir.bind(sftp));
+  // 使用posix.join确保路径在不同系统中正确
+  const fullPath = posix.join(remotePath);
 
-  const isExist = await statSync(_posixJoin)
+  // 检查远程目录是否存在
+  const exists = await stat(fullPath)
     .then(() => true)
     .catch(() => false);
 
-  if (isExist) return 1;
+  // 如果存在，直接返回1
+  if (exists) return 1;
 
-  const response = await enquirer.mkdirRemotePath();
-  if (response) {
-    const _response = await mkdirSync(_posixJoin);
-    if (_response === undefined) {
-      console.log(chalk.green(`远程目录 ${remotePath} 创建成功`));
-      return 0;
-    }
-  } else {
+  // 插询用户是否创建不存在的目录
+  const shouldCreate = await enquirer.mkdirRemotePath();
+  if (!shouldCreate) {
+    // 用户选择不创建，结束客户端连接并返回2
     Client.end();
     return 2;
+  }
+
+  try {
+    // 创建目录, mkdir方法成功执行时不返回任何值 (即undefined)
+    const makeDirResponse = await mkdir(fullPath);
+    if (makeDirResponse === undefined) {
+      console.log(chalk.green(`远程目录 ${remotePath} 创建成功`));
+      // 目录创建成功，返回0
+      return 0;
+    }
+  } catch (error) {
+    // 如果创建过程中出错，打印错误信息，结束客户端连接
+    console.error(chalk.red(`远程目录创建失败: ${error.message}`));
+    Client.end();
+    // 设计上不应该到达这里，如果创建目录失败应该抛出异常，因此这里没有返回值说明，但可以添加返回值以便于后续逻辑处理
+    return 3;
   }
 };
 
@@ -291,7 +316,7 @@ export const compress = (fileName, localPath) => {
 export const outputStatistics = (type, statistics) => {
   console.log(
     chalk.green(
-      `\n${type} 文件夹:${statistics.directory.num} 个, 文件:${statistics.file.num} 个, 总大小:${bytesToMB(
+      `\n${type} 文件夹:${statistics.directory.count} 个, 文件:${statistics.file.count} 个, 总大小:${bytesToMB(
         statistics.directory.size + statistics.file.size,
       )} MB\n`,
     ),
@@ -304,7 +329,7 @@ export const readJson = async filePath => {
   return json;
 };
 
-export const processTask = async (_spinner, items, itemType, taskType = "upload") => {
+export const processTask = async (items, itemType, taskType = "upload") => {
   const message = {
     upload: ["创建", "上传"],
     delete: ["删除", "删除"],
@@ -316,22 +341,25 @@ export const processTask = async (_spinner, items, itemType, taskType = "upload"
       let chunk = array.slice(i, i + chunkSize);
       result.push(chunk);
     }
+
     return result;
   };
 
+  let responses = [];
+
   for (const chunk of splitArrayIntoChunks(items)) {
-    const responses = await Promise.all(chunk.map(item => item()));
-    responses.forEach(item => {
-      if (item.success === false) {
+    // console.log(chunk);
+    const _responses = await Promise.all(chunk.map(item => item()));
+    responses = _responses
+      .filter(item => item.success === false)
+      .map(item => {
         const typeText = itemType === "directory" ? "文件夹" : "文件";
-        _spinner.fail(
-          chalk.red(
-            `${typeText}:${item.path} ${itemType === "directory" ? message[taskType][0] : message[taskType][0]}失败\n`,
-          ),
+        return chalk.red(
+          `${typeText}:${item.path} ${itemType === "directory" ? message[taskType][0] : message[taskType][0]}失败\n`,
         );
-      }
-    });
+      });
   }
+  return responses;
 };
 
 export const generateTemplateConfig = async filePath => {

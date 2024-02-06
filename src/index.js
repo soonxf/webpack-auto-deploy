@@ -1,10 +1,9 @@
-import { promises } from "fs";
+import { promises as fsPromises } from "fs";
 import ora from "ora";
 import chalk from "chalk";
-import enquirer from "./enquirer.js"; // 确保 enquirer.js 支持 ESM
 import { promisify } from "util";
 import { Client } from "ssh2";
-
+import enquirer from "./enquirer.js"; // 确保 enquirer.js 支持 ESM
 import {
   isWindowsOrLinuxPath,
   toNormalize,
@@ -15,26 +14,23 @@ import {
   isObject,
 } from "./utils.js";
 
-// import { fileURLToPath } from "url";
-// import { resolve, dirname } from "path";
-
-// 获取当前文件的路径
-// const __filename = fileURLToPath(import.meta.url);
-// 获取当前文件所在目录的路径
-// const __dirname = dirname(__filename);
-
+// Webpack自动部署类
 export default class WebpackAutoDeploy {
   constructor(options) {
     this.fileName = "";
     this.options = {};
-    this.Client = {};
+    this.Client = new Client();
 
-    this.initApp(options);
+    this.initApp(options).catch(error => {
+      console.error(chalk.red("初始化应用失败:"), error);
+    });
   }
+
+  // 初始化应用
   async initApp(options) {
     const option = await enquirer.selectEnv(isObject(options) ? [options] : options);
 
-    if (option === undefined) return;
+    if (!option) return;
 
     this.options = {
       ...option,
@@ -42,44 +38,46 @@ export default class WebpackAutoDeploy {
       remotePath: toNormalize(option.remotePath),
     };
 
-    this.Client = new Client();
-
     const { appName, environment } = this.options;
-    const fileName = `backups_${appName}_${environment}_${new Date().__format(
+
+    this.fileName = `backups_${appName}_${environment}_${new Date().__format(
       "yyyy_MM_dd_hh_mm_ss",
     )}_${String.__generateRandomString()}.tar.gz`;
-    this.fileName = fileName;
 
-    const { compress: _compress } = this.options;
-    if (_compress) {
-      const spinner = ora("正在压缩本地文件...\n").start();
-      try {
-        const { localPath } = this.options;
-        const response = await compress(this.fileName, localPath);
-        if (response) {
-          spinner.succeed(chalk.green("压缩成功"));
-          spinner.succeed(chalk.green(`保存路径:${response}`));
-        } else spinner.fail(chalk.red("压缩失败"));
-      } catch (error) {
+    if (this.options.compress) {
+      await this.compressLocalFiles();
+    }
+    const isConnected = await enquirer.connect();
+    if (isConnected) {
+      this.connect();
+    }
+  }
+
+  // 压缩本地文件
+  async compressLocalFiles() {
+    const spinner = ora("正在压缩本地文件...\n").start();
+    try {
+      const { localPath } = this.options;
+      const response = await compress(this.fileName, localPath);
+      if (response) {
+        spinner.succeed(chalk.green("压缩成功"));
+        spinner.succeed(chalk.green(`保存路径:${response}`));
+      } else {
         spinner.fail(chalk.red("压缩失败"));
       }
+    } catch (error) {
+      spinner.fail(chalk.red("压缩失败"));
+      throw error; // 抛出错误，以便调用者处理
     }
-    const response = await enquirer.connect();
-    response && this.connect();
   }
+
+  // 连接到服务器
   async connect() {
     const spinner = ora("正在连接服务器...\n").start();
     try {
-      const {
-        serverOptions: {
-          host = undefined,
-          port = undefined,
-          username = undefined,
-          password = undefined,
-          privateKey = undefined,
-          passphrase = undefined,
-        },
-      } = this.options;
+      const { host, port, username, password, privateKey, passphrase } = this.options.serverOptions;
+
+      const privateKeyContent = privateKey ? await fsPromises.readFile(toNormalize(privateKey)) : undefined;
 
       this.Client.connect({
         host,
@@ -87,24 +85,24 @@ export default class WebpackAutoDeploy {
         username,
         password,
         passphrase,
-        privateKey: privateKey ? await promises.readFile(toNormalize(privateKey)) : undefined,
+        privateKey: privateKeyContent,
       });
 
-      this.Client.on("ready", async (err, stream) => {
-        if (!!err) {
-          console.log(chalk.red(err));
-          spinner.fail(chalk.red("连接失败"));
-        } else {
-          spinner.succeed(chalk.green("连接成功"));
-          await this.execBackup();
-        }
+      this.Client.on("ready", async () => {
+        spinner.succeed(chalk.green("连接成功"));
+        await this.execBackup();
       });
 
-      this.Client.on("error", err => spinner.fail(chalk.red(err)));
+      this.Client.on("error", err => {
+        console.error(chalk.red("连接错误:"), err);
+        spinner.fail(chalk.red("连接失败"));
+      });
     } catch (error) {
-      spinner.fail(chalk.red(error));
+      spinner.fail(chalk.red("连接失败"));
+      throw error; // 抛出错误，以便调用者处理
     }
   }
+
   async execBackup() {
     const { remotePath } = this.options;
 
